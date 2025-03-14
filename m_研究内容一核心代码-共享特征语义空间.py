@@ -26,53 +26,47 @@ from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 import numpy as np
 
-"""
+# 共享特征语义空间的颜色映射表
+# 用于将不同类别的语义特征可视化
 Labscene_COLORMAP = [
-    [128, 0, 0],
-    [0, 255, 0],
-    [0, 128, 0],
-    [128, 128, 0],
-    [0, 0, 128],
-    [128, 0, 128],
-    [0, 128, 128],
-    [128, 128, 128],
-    [64, 0, 0]
-
-]"""
-
-Labscene_COLORMAP = [
-    [0, 0, 0],
-    [0, 255, 0],
-    [0, 0, 255],
-    [0, 0, 255],
-    [0, 0, 128],
-    [128, 0, 128],
-    [0, 128, 128],
-    [0, 0, 0],
-    [64, 0, 0],
+    [0, 0, 0],        # 背景
+    [0, 255, 0],      # 红色车辆
+    [0, 0, 255],      # 白色车辆
+    [0, 0, 255],      # 蓝色车辆
+    [0, 0, 128],      # 目标物体
+    [128, 0, 128],    # 黄色物体
+    [0, 128, 128],    # 墙壁
+    [0, 0, 0],        # 平面
+    [64, 0, 0],       # 其他背景
 ]
 
+# 语义特征ID映射表
+# 用于将训练时的类别ID映射到实际语义空间中的ID
 Labscene_IDMAP = [[7], [8], [11], [12], [13], [17], [19], [20], [21]]
 
+# 共享语义空间中的类别定义
+# 包含视觉和雷达观测数据中的共同语义类别
 Labscene_Class = [
-    "S_Obs",
-    "R_Car",
-    "W_Car",
-    "B_Car",
-    "B_Target",
-    "Y_Object",
-    "Wall",
-    "Plane",
-    "_background_",
+    "S_Obs",        # 静态障碍物
+    "R_Car",        # 红色车辆
+    "W_Car",        # 白色车辆
+    "B_Car",        # 蓝色车辆
+    "B_Target",     # 目标物体
+    "Y_Object",     # 黄色物体
+    "Wall",         # 墙壁
+    "Plane",        # 平面
+    "_background_", # 背景
 ]
 
-
+# 将预测结果转换为可视化图像
+# 用于在共享语义空间中展示特征提取结果
 def label2image(pred, COLORMAP=Labscene_COLORMAP):
     colormap = np.array(COLORMAP, dtype="uint8")
     X = pred.astype("int32")
     return colormap[X, :]
 
-
+# 将训练ID转换为实际语义空间ID
+# 用于将模型输出映射到共享语义空间
 def trainid2id(pred, IDMAP=Labscene_IDMAP):
     colormap = np.array(IDMAP, dtype="uint8")
     X = pred.astype("int32")
@@ -80,6 +74,7 @@ def trainid2id(pred, IDMAP=Labscene_IDMAP):
 
 
 def detect(save_img=False):
+    # 解析命令行参数，获取输入源、模型权重等配置
     source, weights, view_img, save_txt, imgsz = (
         opt.source,
         opt.weights,
@@ -87,86 +82,93 @@ def detect(save_img=False):
         opt.save_txt,
         opt.img_size,
     )
-    save_img = not opt.nosave and not source.endswith(".txt")  # save inference images
+    # 判断是否需要保存推理结果图像
+    save_img = not opt.nosave and not source.endswith(".txt")
+    # 判断输入源是否为网络摄像头或视频流
     webcam = (
         source.isnumeric()
         or source.endswith(".txt")
         or source.lower().startswith(("rtsp://", "rtmp://", "http://", "https://"))
     )
 
-    # Directories
+    # 创建保存结果的目录
     save_dir = Path(
         increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok)
-    )  # increment run
+    )
     (save_dir / "labels" if save_txt else save_dir).mkdir(
         parents=True, exist_ok=True
-    )  # make dir
+    )
+    # 如果需要提交结果，创建专门的子目录
     if opt.submit:
         sub_dir = str(save_dir) + "/results/"
         if not os.path.exists(sub_dir):
             os.mkdir(sub_dir)
 
-    # Initialize
+    # 初始化日志和硬件设备
     set_logging()
     device = select_device(opt.device)
-    half = (
-        device.type != "cpu"
-    )  # half precision only supported on CUDA 原始代码,cpu用float32,gpu用float16
-    # half = False  # 强制禁用float16推理, 20和30系列显卡有tensor cores float16, 10系列卡不开cudnn.benchmark速度反而降
-    # Load model
-    model = attempt_load(weights, map_location=device)  # load FP32 model
-    stride = int(model.stride.max())  # model stride
-    imgsz = check_img_size(imgsz, s=stride)  # check img_size
-    if half:
-        model.half()  # to FP16
+    # 判断是否使用半精度浮点数（FP16）
+    half = device.type != "cpu"
 
-    # Second-stage classifier
+    # 加载预训练模型
+    model = attempt_load(weights, map_location=device)
+    stride = int(model.stride.max())
+    # 检查输入图像尺寸是否符合要求
+    imgsz = check_img_size(imgsz, s=stride)
+    if half:
+        model.half()  # 将模型转换为FP16
+
+    # 初始化第二阶段的分类器（当前未启用）
     classify = False
     if classify:
-        modelc = load_classifier(name="resnet101", n=2)  # initialize
+        modelc = load_classifier(name="resnet101", n=2)
         modelc.load_state_dict(
             torch.load("weights/resnet101.pt", map_location=device)["model"]
         ).to(device).eval()
 
-    # Set Dataloader
+    # 初始化视频写入器
     vid_path, vid_writer, s_writer = None, None, None
+    # 根据输入源类型选择数据加载方式
     if webcam:
         view_img = check_imshow()
-        cudnn.benchmark = True  # set True to speed up constant image size inference
-        # 开启后第一次推理会把各种后端算法测试一遍,后续推理都用最快的算法,会有较明显加速
-        # 算法速度不仅与复杂度有关,也与输入规模相关,因此要求后续输入同尺寸,原版仅在视频测试时开启,想测真实速度应该开启
+        cudnn.benchmark = True  # 启用CUDA加速
         dataset = LoadStreams(source, img_size=imgsz, stride=stride)
     else:
         cudnn.benchmark = False
-        dataset = LoadImages(source, img_size=imgsz, stride=stride)  # 跑的是这个
+        dataset = LoadImages(source, img_size=imgsz, stride=stride)
 
-    if opt.submit or opt.save_as_video:  # 提交和做视频必定是同尺寸
+    # 如果提交结果或保存视频，强制启用CUDA加速
+    if opt.submit or opt.save_as_video:
         cudnn.benchmark = True
 
-    # Get names and colors
+    # 获取模型输出的类别名称和颜色
     names = model.module.names if hasattr(model, "module") else model.names
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
-    # Run inference
+    # 运行一次推理以初始化模型
     if device.type != "cpu":
         model(
             torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters()))
-        )  # run once
+        )
     t0 = time.time()
+
+    # 遍历数据集进行推理
     for path, img, im0s, vid_cap in dataset:
+        # 将输入图像转换为张量并发送到设备
         img = torch.from_numpy(img).to(device)
-        img = img.half() if half else img.float()  # uint8 to fp16/32
-        img /= 255.0  # 0 - 255 to 0.0 - 1.0
+        img = img.half() if half else img.float()
+        img /= 255.0  # 将像素值归一化到[0,1]范围
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
 
-        # Inference
+        # 执行推理
         with torch.no_grad():
             t1 = time_synchronized()
+            # 模型输出包含检测结果和分割结果
             out = model(img, augment=opt.augment)
             pred = out[0][0]
-            seg = out[1]  # [0]
-            # Apply NMS
+            seg = out[1]
+            # 应用非极大值抑制（NMS）过滤检测结果
             pred = non_max_suppression(
                 pred,
                 opt.conf_thres,
@@ -176,48 +178,49 @@ def detect(save_img=False):
             )
             t2 = time_synchronized()
 
-        # Apply Classifier
-        if classify:
-            pred = apply_classifier(pred, modelc, img, im0s)
-
-        # Process detections
-        for i, det in enumerate(pred):  # detections per image
-            if webcam:  # batch_size >= 1
+        # 处理检测结果
+        for i, det in enumerate(pred):
+            # 根据输入源类型获取当前帧信息
+            if webcam:
+                # 如果是网络摄像头输入，获取当前帧的路径、状态信息、图像和帧号
                 p, s, im0, frame = path[i], "%g: " % i, im0s[i].copy(), dataset.count
             else:
+                # 如果是文件输入，获取文件路径、空状态信息、原始图像和帧号（默认为0）
                 p, s, im0, frame = path, "", im0s, getattr(dataset, "frame", 0)
 
-            p = Path(p)  # to Path
-            save_path = str(save_dir / p.name)  # img.jpg
+            p = Path(p)
+            # 构建保存路径
+            save_path = str(save_dir / p.name)
             txt_path = str(save_dir / "labels" / p.stem) + (
                 "" if dataset.mode == "image" else f"_{frame}"
-            )  # img.txt
-            s += "%gx%g " % img.shape[2:]  # print string
-            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            )
+            s += "%gx%g " % img.shape[2:]
+            # 获取归一化参数
+            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]
             if len(det):
-                # Rescale boxes from img_size to im0 size
+                # 将检测框坐标从模型输入尺寸缩放到原始图像尺寸
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
 
-                # Print results
+                # 统计每个类别的检测数量
                 for c in det[:, -1].unique():
-                    n = (det[:, -1] == c).sum()  # detections per class
-                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+                    n = (det[:, -1] == c).sum()
+                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "
 
-                # Write results
+                # 保存检测结果
                 for *xyxy, conf, cls in reversed(det):
-                    if save_txt:  # Write to file
+                    if save_txt:
+                        # 将检测框坐标转换为归一化的xywh格式
                         xywh = (
                             (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn)
                             .view(-1)
                             .tolist()
-                        )  # normalized xywh
-                        line = (
-                            (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)
-                        )  # label format
+                        )
+                        line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)
                         with open(txt_path + ".txt", "a") as f:
                             f.write(("%g " * len(line)).rstrip() % line + "\n")
 
-                    if save_img or view_img:  # Add bbox to image
+                    if save_img or view_img:
+                        # 在图像上绘制检测框
                         label = f"{names[int(cls)]} {conf:.2f}"
                         plot_one_box(
                             xyxy,
@@ -227,51 +230,57 @@ def detect(save_img=False):
                             line_thickness=3,
                         )
 
-            # Print time (inference + NMS)
+            # 打印推理时间
             print(f"{s}Done. ({t2 - t1:.5f}s)")
-            # seg = seg[0]
+            # 对分割结果进行插值，使其与原始图像尺寸一致
             seg = F.interpolate(
                 seg, (im0.shape[0], im0.shape[1]), mode="bilinear", align_corners=True
             )[0]
+            # 将分割结果转换为可视化图像
             mask = label2image(seg.max(axis=0)[1].cpu().numpy(), Labscene_COLORMAP)[
                 :, :, ::-1
             ]
+            # 将分割结果与原始图像融合
             dst = cv2.addWeighted(mask, 0.4, im0, 0.6, 0)
-            # Stream results
 
+            # 显示结果
             if view_img:
                 cv2.imshow(str(p), im0)
                 cv2.imshow("segmentation", mask)
                 cv2.imshow("mix", dst)
-                cv2.waitKey(0)  # 1 millisecond
+                cv2.waitKey(0)
+
+            # 保存提交结果
             if opt.submit:
                 sub_path = sub_dir + str(p.name)
                 sub_path = sub_path[:-4] + "_pred.png"
                 result = trainid2id(seg.max(axis=0)[1].cpu().numpy(), Labscene_IDMAP)
                 cv2.imwrite(sub_path, result)
-            # Save results (image with detections)
+
+            # 保存结果图像
             if save_img:
                 if dataset.mode == "image":
-                    # cv2.imwrite(save_path, im0)
                     cv2.imwrite(save_path[:-4] + "_mask" + save_path[-4:], mask)
-                    # cv2.imwrite(save_path[:-4]+"_dst"+save_path[-4:], dst)
-
-                else:  # 'video' or 'stream'
-                    if vid_path != save_path:  # new video
-                        vid_path = save_path
+                else:
+                    # 处理视频或流媒体输入
+                    if vid_path != save_path:
+                        vid_path = save_path  # 更新当前视频路径
+                        # 如果已存在视频写入器，先释放资源
                         if isinstance(vid_writer, cv2.VideoWriter):
-                            vid_writer.release()  # release previous video writer
-                        if vid_cap:  # video
-                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        else:  # stream
+                            vid_writer.release()
+                        # 如果输入是视频文件，获取其帧率和分辨率
+                        if vid_cap:
+                            fps = vid_cap.get(cv2.CAP_PROP_FPS)  # 获取视频帧率
+                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # 获取视频宽度
+                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # 获取视频高度
+                        else:
+                            # 如果是流媒体输入，使用默认帧率和当前帧分辨率
                             fps, w, h = 30, dst.shape[1], dst.shape[0]
-                            # save_path2 = save_path
-                            save_path += ".mp4"
-                            save_path2 = save_path + "mask.mp4"
-                            save_path3 = save_path + "origin.mp4"
+                            save_path += ".mp4"  # 为输出文件添加扩展名
+                            save_path2 = save_path + "mask.mp4"  # 生成掩码视频路径
+                            save_path3 = save_path + "origin.mp4"  # 生成原始视频路径
 
+                        # 初始化视频写入器
                         vid_writer = cv2.VideoWriter(
                             save_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
                         )
@@ -282,11 +291,12 @@ def detect(save_img=False):
                             save_path3, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
                         )
 
-                        # vid_writer2 = cv2.VideoWriter(save_path2, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-                    vid_writer.write(dst)  # (im0)
-                    vid_writer2.write(mask)  # (im0)
-                    vid_writer3.write(im0)  # (im0)
+                    # 写入视频帧
+                    vid_writer.write(dst)
+                    vid_writer2.write(mask)
+                    vid_writer3.write(im0)
 
+            # 如果需要保存为单独的视频文件
             if opt.save_as_video:
                 if not s_writer:
                     fps, w, h = 30, dst.shape[1], dst.shape[0]
@@ -297,6 +307,8 @@ def detect(save_img=False):
                         (w, h),
                     )
                 s_writer.write(dst)
+
+    # 打印最终结果信息
     if save_txt or save_img:
         s = (
             f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}"
