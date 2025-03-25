@@ -114,20 +114,43 @@ class CrossFeatureEnhancement(nn.Module):
         return T_L_hat
 
 
-# 特征融合模块
+# 多尺度特征融合模块
 class FeatureFusion(nn.Module):
     def __init__(self, input_dim):
         super(FeatureFusion, self).__init__()
-        # 全连接层：将拼接后的特征映射回原始维度
-        self.fc = nn.Linear(input_dim * 2, input_dim)
+        # 多尺度特征提取网络
+        self.multi_scale = nn.Sequential(
+            nn.Conv1d(input_dim*2, 64, kernel_size=3, padding=1),  # 局部特征提取
+            nn.Conv1d(input_dim*2, 64, kernel_size=5, padding=2),  # 大范围特征提取
+            nn.AdaptiveAvgPool1d(1)  # 全局特征提取
+        )
+        # 特征融合层
+        self.fusion_layer = nn.Sequential(
+            nn.Linear(128*3, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(256, input_dim)
+        )
+        # 残差连接
+        self.res_conv = nn.Linear(input_dim*2, input_dim)
 
     def forward(self, F_V, F_L):
-        # 将特征展平并拼接
-        F_V_flat = F_V.view(F_V.size(0), -1)  # 展平视觉特征
-        F_L_flat = F_L.view(F_L.size(0), -1)  # 展平激光雷达特征
-        combined = torch.cat([F_V_flat, F_L_flat], dim=1)  # 沿特征维度拼接
-        fused = torch.relu(self.fc(combined))  # 通过全连接层并激活
-        return fused
+        # 特征拼接
+        combined = torch.cat([F_V, F_L], dim=2).permute(0, 2, 1)  # [B, 256, N]
+        
+        # 多尺度特征提取
+        scale1 = self.multi_scale[0](combined).mean(dim=-1)  # 局部特征
+        scale2 = self.multi_scale[1](combined).mean(dim=-1)  # 全局特征 
+        scale3 = self.multi_scale[2](combined).squeeze(-1)   # 上下文特征
+        
+        # 多尺度融合
+        fused = torch.cat([scale1, scale2, scale3], dim=1)
+        fused = self.fusion_layer(fused)
+        
+        # 残差连接
+        residual = self.res_conv(torch.cat([F_V.mean(1), F_L.mean(1)], dim=1))
+        return torch.relu(fused + residual)
 
 
 # 感知模块
