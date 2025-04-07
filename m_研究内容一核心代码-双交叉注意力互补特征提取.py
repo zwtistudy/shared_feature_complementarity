@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
+from torchvision.models import resnet18
 
-
-# 视觉特征提取模块（使用ResNet）
-class VisionFeatureExtractor(nn.Module):
+# 视觉特征提取模块（使用卷积）
+class VisionFeatureExtractorCNN(nn.Module):
     def __init__(self):
-        super(VisionFeatureExtractor, self).__init__()
+        super(VisionFeatureExtractorCNN, self).__init__()
         # 第一层卷积：输入通道3，输出通道32，卷积核5x5，步长2
         self.conv1 = nn.Conv2d(3, 32, kernel_size=5, stride=2)
         # 最大池化层：池化窗口2x2
@@ -30,6 +30,30 @@ class VisionFeatureExtractor(nn.Module):
         x = torch.relu(x)
         # 全连接层输出
         x = self.fc(x)
+        return x
+
+
+# 视觉特征提取模块（使用ResNet18）
+class VisionFeatureExtractorResNet(nn.Module):
+    def __init__(self):
+        super(VisionFeatureExtractorResNet, self).__init__()
+        # 重新定义ResNet18模型
+        self.resnet = resnet18(pretrained=False)  # 使用pretrained=True加载预训练权重
+
+        # 替换ResNet18的第一个卷积层
+        self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # 替换ResNet18的第一个池化层
+        self.resnet.maxpool = nn.Identity()  # 直接跳过最大池化层
+        # 替换ResNet18的最后一个全连接层
+        self.resnet.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512, 128),
+            nn.BatchNorm1d(128),
+        )
+
+    def forward(self, x):
+        # 前向传播：通过ResNet18处理输入
+        x = self.resnet(x)
         return x
 
 
@@ -158,7 +182,8 @@ class PerceptionModule(nn.Module):
     def __init__(self):
         super(PerceptionModule, self).__init__()
         # 视觉特征提取器：从图像中提取特征
-        self.vision_extractor = VisionFeatureExtractor()
+        # self.vision_extractor = VisionFeatureExtractorCNN()
+        self.vision_extractor = VisionFeatureExtractorResNet()
         # 激光雷达特征提取器：从点云数据中提取特征
         self.lidar_extractor = LidarFeatureExtractor()
         # 双交叉注意力机制：用于特征增强
