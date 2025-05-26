@@ -73,6 +73,7 @@ def trainid2id(pred, IDMAP=Labscene_IDMAP):
     return colormap[X, :]
 
 
+# 为现实观测提取语义特征。虚拟语义提取在Unity中做的
 def detect(save_img=False):
     # 解析命令行参数，获取输入源、模型权重等配置
     source, weights, view_img, save_txt, imgsz = (
