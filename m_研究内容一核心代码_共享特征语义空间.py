@@ -66,13 +66,12 @@ def trainid2id(pred, IDMAP=Labscene_IDMAP):
 
 
 # 为现实观测提取语义特征
-def detect(save_img=False):
+def detect():
     # 从命令行参数中获取输入参数
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
-    # 硬编码覆盖参数（测试用）
     weights = "./race.pt"       # 指定模型权重文件路径
     source = "./data/test_imgs" # 指定输入图像目录
-    view_img = True             # 强制开启实时显示
+    view_img = True             # 开启实时显示
     # 确定是否需要保存结果图像（当不指定--nosave且输入不是txt文件时保存）
     save_img = not opt.nosave and not source.endswith('.txt')
 
@@ -92,8 +91,6 @@ def detect(save_img=False):
     if half:
         model.half()  # 转换为FP16精度
 
-    # 初始化视频相关变量
-    vid_path, vid_writer, s_writer = None, None, None
     cudnn.benchmark = False  # 禁用cudnn基准测试（固定输入尺寸时建议关闭）
     # 创建数据加载器（处理图像/视频/摄像头输入）
     dataset = LoadImages(source, img_size=imgsz, stride=stride)
@@ -137,7 +134,7 @@ def detect(save_img=False):
 
             p = Path(p)  # 将路径转换为Path对象
             save_path = str(save_dir / p.name)  # 构建保存路径（如：runs/detect/exp/img.jpg）
-            # 构建标签文件路径（如：runs/detect/exp/labels/img.txt）
+            # 构建标签文件路径（如：runs/detect/exp/labels/img.png）
             s += '%gx%g ' % img.shape[2:]  # 添加图像尺寸到信息字符串（如：640x480）
 
             if len(det):  # 如果检测到目标
@@ -192,10 +189,6 @@ def detect(save_img=False):
     if save_img:
         # 打印结果保存路径信息
         print(f"Results saved to {save_dir}")
-
-    # 如果视频写入器已初始化，则释放资源
-    if s_writer != None:
-        s_writer.release()
 
     # 打印整个检测过程的总耗时（从开始到结束）
     print(f'Done. ({time.time() - t0:.3f}s)')

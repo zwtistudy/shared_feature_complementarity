@@ -6,67 +6,67 @@ from torchvision.models import resnet18
 
 
 class VisualEncoder(nn.Module):
-    """处理视觉输入的3层CNN+2层FC"""
+    """视觉编码器模块，用于处理视觉输入
+    结构包含3层CNN和2层全连接层
+    输入: 视觉观测数据(通常是图像)
+    输出: 编码后的特征向量
+    """
 
     def __init__(self, obs_shape, output_dim):
+        """初始化视觉编码器
+        Args:
+            obs_shape: 输入观测的形状 (channels, height, width)
+            output_dim: 输出特征的维度
+        """
         super().__init__()
-        self.conv1 = nn.Conv2d(obs_shape[0], 32, 8, 4)
-        self.conv2 = nn.Conv2d(32, 64, 4, 2)
-        self.conv3 = nn.Conv2d(64, 64, 3, 1)
+        # 3层卷积网络结构
+        self.conv1 = nn.Conv2d(obs_shape[0], 32, 8, 4)  # 第一层卷积: 32个8x8卷积核，步长4
+        self.conv2 = nn.Conv2d(32, 64, 4, 2)  # 第二层卷积: 64个4x4卷积核，步长2
+        self.conv3 = nn.Conv2d(64, 64, 3, 1)  # 第三层卷积: 64个3x3卷积核，步长1
+
+        # 计算卷积层输出尺寸
         conv_out_size = self._get_conv_output(obs_shape)
 
+        # 全连接层结构
         self.fc = nn.Sequential(
-            nn.Linear(conv_out_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, output_dim),
-            nn.ReLU()
+            nn.Linear(conv_out_size, 128),  # 第一层全连接
+            nn.ReLU(),  # ReLU激活函数
+            nn.Linear(128, output_dim),  # 第二层全连接
+            nn.ReLU()  # ReLU激活函数
         )
 
-        # 初始化
+        # 初始化卷积层权重
         for layer in [self.conv1, self.conv2, self.conv3]:
-            nn.init.orthogonal_(layer.weight, np.sqrt(2))
+            nn.init.orthogonal_(layer.weight, np.sqrt(2))  # 使用正交初始化
 
     def _get_conv_output(self, shape):
-        with torch.no_grad():
-            dummy = torch.zeros(1, *shape)
+        """计算卷积层输出的特征维度大小
+        Args:
+            shape: 输入张量的形状 (channels, height, width)
+        Returns:
+            int: 展平后的特征维度总数
+        """
+        with torch.no_grad():  # 禁用梯度计算
+            dummy = torch.zeros(1, *shape)  # 创建全零的假输入张量
+            # 通过所有卷积层前向传播
             dummy = self.conv3(self.conv2(self.conv1(dummy)))
-            return int(np.prod(dummy.size()))
+            return int(np.prod(dummy.size()))  # 计算并返回展平后的特征总数
 
     def forward(self, x):
-        if x.ndim == 3:  # 单帧输入时添加batch维度
-            x = x.unsqueeze(0)
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)
-        return self.fc(x)
-
-
-class VisionFeatureExtractorResNet(nn.Module):
-    """处理视觉输入的3层CNN+2层FC"""
-    def __init__(self, obs_shape, output_dim):
-        super(VisionFeatureExtractorResNet, self).__init__()
-        self.resnet = resnet18(pretrained=False)  # 使用pretrained=True加载预训练权重
-
-        # 替换ResNet18的第一个卷积层
-        self.resnet.conv1 = nn.Conv2d(obs_shape[0], 64, kernel_size=7, stride=2, padding=3, bias=False)
-        # 替换ResNet18的第一个池化层
-        self.resnet.maxpool = nn.Identity()  # 直接跳过最大池化层
-        # 替换ResNet18的最后一个全连接层
-        self.resnet.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(512, output_dim),
-            nn.BatchNorm1d(output_dim),
-        )
-        # 初始化resnet
-        for layer in [self.resnet.conv1, self.resnet.fc[1]]:
-            nn.init.orthogonal_(layer.weight, np.sqrt(2))
-
-    def forward(self, x):
-        if x.ndim == 3:  # 单帧输入时添加batch维度
-            x = x.unsqueeze(0)
-        x = self.resnet(x)
-        return x
+        """前向传播过程
+        Args:
+            x: 输入张量，可以是3维(单帧)或4维(批量)
+        Returns:
+            编码后的特征向量
+        """
+        if x.ndim == 3:  # 如果是单帧输入(无batch维度)
+            x = x.unsqueeze(0)  # 添加batch维度
+        # 通过三层卷积网络，每层后接ReLU激活
+        x = F.relu(self.conv1(x))  # 第一层卷积+激活
+        x = F.relu(self.conv2(x))  # 第二层卷积+激活
+        x = F.relu(self.conv3(x))  # 第三层卷积+激活
+        x = x.view(x.size(0), -1)  # 展平特征图(保留batch维度)
+        return self.fc(x)  # 通过全连接层输出最终特征
 
 
 # 激光雷达特征提取模块（使用一维卷积）
@@ -240,124 +240,172 @@ class ActorCriticModel(nn.Module):
         )
 
     def _build_recurrent_layer(self, recurrence_cfg, input_size):
-        """构建隐藏层"""
+        """构建并初始化循环神经网络层
+
+        Args:
+            recurrence_cfg (dict): 循环网络配置字典，包含:
+                - layer_type: 网络类型('gru'或'lstm')
+                - hidden_state_size: 隐藏层大小
+            input_size (int): 输入特征维度
+
+        Returns:
+            nn.Module: 初始化好的循环神经网络层(GRU或LSTM)
+        """
+        # 根据配置选择GRU或LSTM
         if recurrence_cfg["layer_type"] == "gru":
             layer = nn.GRU(input_size, recurrence_cfg["hidden_state_size"], batch_first=True)
         else:
             layer = nn.LSTM(input_size, recurrence_cfg["hidden_state_size"], batch_first=True)
 
-        # 初始化
+        # 初始化网络参数
         for name, param in layer.named_parameters():
-            if "bias" in name:
+            if "bias" in name:  # 偏置项初始化为0
                 nn.init.constant_(param, 0)
-            elif "weight" in name:
+            elif "weight" in name:  # 权重使用正交初始化
                 nn.init.orthogonal_(param, np.sqrt(2))
         return layer
 
     def _build_policy_value_networks(self, hidden_size, action_size):
-        """构建策略网络和价值网络"""
-        # 共享隐藏层
+        """构建策略网络和价值网络
+
+        Args:
+            hidden_size (int): 隐藏层维度大小
+            action_size (int): 动作空间维度大小
+        """
+        # 共享隐藏层: 将RNN输出映射到隐藏空间
         self.lin_hidden = nn.Linear(
             self.recurrent_layer.hidden_size,
             hidden_size
         )
-        nn.init.orthogonal_(self.lin_hidden.weight, np.sqrt(2))
+        nn.init.orthogonal_(self.lin_hidden.weight, np.sqrt(2))  # 正交初始化
 
-        # 策略分支
+        # 策略分支: 输出动作分布参数
         self.policy_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, action_size)
+            nn.Linear(hidden_size, hidden_size),  # 隐藏层
+            nn.ReLU(),  # 非线性激活
+            nn.Linear(hidden_size, action_size)  # 输出层
         )
-        nn.init.orthogonal_(self.policy_head[-1].weight, np.sqrt(2))
+        nn.init.orthogonal_(self.policy_head[-1].weight, np.sqrt(2))  # 正交初始化
 
-        # 价值分支
+        # 价值分支: 输出状态价值估计
         self.value_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, 1)
+            nn.Linear(hidden_size, hidden_size),  # 隐藏层
+            nn.ReLU(),  # 非线性激活
+            nn.Linear(hidden_size, 1)  # 输出单个价值估计
         )
-        nn.init.orthogonal_(self.value_head[-1].weight, 1)
+        nn.init.orthogonal_(self.value_head[-1].weight, 1)  # 正交初始化(缩放因子1)
 
-        # 标准差参数
-        self.log_std = nn.Parameter(torch.zeros(1, action_size))
+        # 标准差参数: 用于连续动作空间的动作探索
+        self.log_std = nn.Parameter(torch.zeros(1, action_size))  # 初始化为0
 
     def forward(self, obs, recurrent_cell, device, seq_len=1):
-        # 编码各个输入源
+        """Actor-Critic模型的前向传播过程
+
+        Args:
+            obs: 多模态观测输入列表
+            recurrent_cell: RNN/LSTM的隐藏状态
+            device: 计算设备(cpu/gpu)
+            seq_len: 序列长度(用于处理时序数据)
+
+        Returns:
+            mean: 动作均值
+            std: 动作标准差
+            value: 状态价值估计
+            recurrent_cell: 更新后的RNN隐藏状态
+        """
+        # 1. 多模态输入预处理
         vision_input, lidar_input, vector_input = None, None, None
         for i, obs_shape in enumerate(self.observation_space_shape):
-            # 把h的第i维度的数据取出来
-            # h_i = torch.tensor([j[i] for j in obs], dtype=torch.float32, device=device)
+            # 处理每个模态的输入数据
             if not isinstance(obs[i], torch.Tensor):
                 h_i = torch.tensor(obs[i], dtype=torch.float32, device=device)
             else:
                 h_i = obs[i].clone().detach()
             h_i.to(device)
-            if len(obs_shape) > 1:
+
+            # 根据输入形状分发到不同模态处理器
+            if len(obs_shape) > 1:  # 视觉输入
                 if len(h_i.shape) == 3:
-                    h_i = h_i.unsqueeze(0)
-                    batch_size = 1
+                    h_i = h_i.unsqueeze(0)  # 添加batch维度
                 vision_input = h_i
-            elif obs_shape[0] > 50:
+            elif obs_shape[0] > 50:  # 激光雷达输入
                 lidar_input = h_i
-            else:
+            else:  # 向量输入
                 vector_input = h_i
 
-        # 单模态特征提取：分别处理视觉和激光雷达输入
-        F_V = self.vision_extractor(vision_input)  # 提取视觉特征
-        F_L = self.lidar_extractor(lidar_input.unsqueeze(1))  # 提取激光雷达特征
-        F_Vec = self.vector_encoder(vector_input)  # 提取向量特征
+        # 2. 特征提取阶段
+        F_V = self.vision_extractor(vision_input)  # 视觉特征提取
+        F_L = self.lidar_extractor(lidar_input.unsqueeze(1))  # 激光雷达特征提取
+        F_Vec = self.vector_encoder(vector_input)  # 向量特征提取
 
-        # 展平特征图并添加位置嵌入
-        T_V = F_V.view(F_V.size(0), -1, self.fusion_output_size)  # 将视觉特征展平为序列
-        T_L = F_L.view(F_L.size(0), -1, self.fusion_output_size)  # 将激光雷达特征展平为序列
+        # 3. 特征增强与融合
+        # 将特征展平为序列形式
+        T_V = F_V.view(F_V.size(0), -1, self.fusion_output_size)
+        T_L = F_L.view(F_L.size(0), -1, self.fusion_output_size)
 
-        # 迭代特征增强
-        for _ in range(3):  # 迭代3次
-            T_L = self.cfe(T_V, T_L)  # 使用视觉特征增强激光雷达特征
-            T_V = self.cfe(T_L, T_V)  # 使用激光雷达特征增强视觉特征
+        # 双交叉注意力特征增强(迭代3次)
+        for _ in range(3):
+            T_L = self.cfe(T_V, T_L)  # 视觉→激光雷达特征增强
+            T_V = self.cfe(T_L, T_V)  # 激光雷达→视觉特征增强
 
-        # 特征融合：将增强后的特征进行融合
+        # 多模态特征融合
         fused_features = self.fusion(T_V, T_L)
 
-        # 合并特征
-        h = torch.cat([fused_features, F_Vec], dim=1)
+        # 4. 特征合并与循环网络处理
+        h = torch.cat([fused_features, F_Vec], dim=1)  # 合并所有特征
 
-        # 循环层处理（保持原有时序处理逻辑）
+        # 处理序列数据
         if seq_len > 1:
             batch_size = h.size(0) // seq_len
-            h = h.view(batch_size, seq_len, -1)
+            h = h.view(batch_size, seq_len, -1)  # 按序列长度重组
         else:
-            h = h.unsqueeze(1)
+            h = h.unsqueeze(1)  # 添加序列维度
 
+        # 通过循环网络处理时序特征
         h, recurrent_cell = self.recurrent_layer(h, recurrent_cell)
         h = h.reshape(-1, self.recurrent_layer.hidden_size)
 
-        # 后续处理
-        h = F.relu(self.lin_hidden(h))
+        # 5. 输出处理
+        h = F.relu(self.lin_hidden(h))  # 共享隐藏层
 
-        # 策略和价值分支
-        mean = torch.tanh(self.policy_head(h))
+        # 策略分支输出(动作分布)
+        mean = torch.tanh(self.policy_head(h))  # 动作均值(-1,1范围)
+        # 价值分支输出(状态价值)
         value = self.value_head(h).squeeze(-1)
+        # 动作标准差(固定参数)
         std = self.log_std.exp().clamp(1e-5, 10).expand_as(mean)
 
         return mean, std, value, recurrent_cell
 
     def init_recurrent_cell_states(self, num_sequences: int, device: torch.device) -> tuple:
-        """Initializes the recurrent cell states (hxs, cxs) as zeros.
+        """初始化循环神经网络的隐藏状态和cell状态(全零初始化)
 
-        Arguments:
-            num_sequences {int} -- The number of sequences determines the number of the to be generated initial recurrent cell states.
-            device {torch.device} -- Target device.
+        Args:
+            num_sequences (int): 需要初始化的序列数量
+            device (torch.device): 计算设备(cpu/gpu)
 
         Returns:
-            {tuple} -- Depending on the used recurrent layer type, just hidden states (gru) or both hidden states and
-                     cell states are returned using initial values.
+            tuple: 包含两个元素的元组:
+                - hxs: 初始化的隐藏状态
+                - cxs: LSTM特有的cell状态(GRU时为None)
         """
-        hxs = torch.zeros((num_sequences), self.recurrence["hidden_state_size"], dtype=torch.float32,
-                          device=device).unsqueeze(0)
-        cxs = None
+        # 初始化隐藏状态(全零张量)
+        hxs = torch.zeros(
+            (num_sequences),
+            self.recurrence["hidden_state_size"],  # 隐藏层大小
+            dtype=torch.float32,
+            device=device
+        ).unsqueeze(0)  # 添加序列维度
+
+        cxs = None  # 默认无cell状态(GRU情况)
+
+        # 如果是LSTM则初始化cell状态
         if self.recurrence["layer_type"] == "lstm":
-            cxs = torch.zeros((num_sequences), self.recurrence["hidden_state_size"], dtype=torch.float32,
-                              device=device).unsqueeze(0)
+            cxs = torch.zeros(
+                (num_sequences),
+                self.recurrence["hidden_state_size"],
+                dtype=torch.float32,
+                device=device
+            ).unsqueeze(0)
+
         return hxs, cxs
